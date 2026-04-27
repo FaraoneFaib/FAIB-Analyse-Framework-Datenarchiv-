@@ -43,7 +43,7 @@ VP_COLOR_CUM_HEIGHT  = "#ffffff"   # weiss = cum_height
 from pathlib import Path
 import numpy as np
 import json
-from viz_utils import apply_time_filter, safe_sample, select_active_fractal_levels
+from utils.viz_utils import apply_time_filter, safe_sample, select_active_fractal_levels
 
 try:
     import plotly.graph_objects as go
