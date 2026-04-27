@@ -108,8 +108,9 @@ except ImportError:
 
 try:
     import viz_plotly
-except ImportError:
+except ImportError as exc:
     viz_plotly = None
+    print(f"[WARN] viz_plotly Import fehlgeschlagen: {exc}")
 
 try:
     import viz_verlagerung
@@ -217,8 +218,11 @@ def run_optional_views(name, ur, fractals, nexus_df,
     if ENABLE_VIZ_INTERACTIVE and viz_interactive is not None:
         viz_interactive.plot_interactive(name, ur, fractals, nexus_df, out_dir)
 
-    if ENABLE_VIZ_PLOTLY and viz_plotly is not None:
-        viz_plotly.plot_plotly(name, ur, fractals, nexus_df, out_dir)
+    if ENABLE_VIZ_PLOTLY:
+        if viz_plotly is None:
+            print("[WARN] ENABLE_VIZ_PLOTLY=True, aber viz_plotly ist nicht verfügbar.")
+        else:
+            viz_plotly.plot_plotly(name, ur, fractals, nexus_df, out_dir)
 
     if ENABLE_VIZ_VERLAGERUNG and viz_verlagerung is not None:
         viz_verlagerung.plot_verlagerung(name, ur, fractals, nexus_df,
