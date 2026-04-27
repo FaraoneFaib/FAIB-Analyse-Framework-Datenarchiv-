@@ -13,7 +13,12 @@ Alle wichtigen Parameter sind ganz oben konfigurierbar.
 # None = alle Punkte (empfohlen fuer kleine Datensaetze)
 # 2000 = fuer grosse Datensaetze (MNQ 12 Mio Ticks)
 # 5000 = fuer mittlere Datensaetze (ERA5)
-VP_MAX_POINTS = None
+VP_MAX_POINTS = 5000
+
+# Optionaler Zeitraumfilter (ISO-String), z.B. "2020-01-01"
+# None = keine zeitliche Begrenzung
+VP_TIME_START = None
+VP_TIME_END = None
 
 # Vibrations-Intensitaet: rollierende Fenstergroesse
 VP_VIB_WINDOW = 200     # Ticks
@@ -38,6 +43,7 @@ VP_COLOR_CUM_HEIGHT  = "#ffffff"   # weiss = cum_height
 from pathlib import Path
 import numpy as np
 import json
+from viz_utils import apply_time_filter, safe_sample, select_active_fractal_levels
 
 try:
     import plotly.graph_objects as go
@@ -45,37 +51,20 @@ try:
 except ImportError:
     raise ImportError("Plotly nicht installiert. Bitte: pip install plotly")
 
-
-def _safe_sample(df, max_points=None):
-    """max_points=None = alle Punkte nehmen (kein Sampling)"""
-    n = len(df)
-    if max_points is None or n <= max_points:
-        return df.copy()
-    step = max(1, n // max_points)
-    idx = np.arange(0, n, step)
-    if idx[-1] != n - 1:
-        idx = np.append(idx, n - 1)
-    return df.iloc[idx].copy()
-
-
 def plot_plotly(name, ur, fractals, nexus_df, out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Filterung — gleiche Logik wie viz_panels/viz_matrix
-    # Fraktale mit quasi-0 MACD werden übersprungen
-    panel_levels = []
-    for F in sorted(fractals.keys()):
-        df_check = fractals[F]
-        if "close_F" in df_check.columns:
-            if df_check["close_F"].nunique() <= 1:
-                print(f"[viz_plotly] F={F} übersprungen — close_F hat nur 1 Wert")
-                continue
-        if "c_macd" in df_check.columns:
-            macd_range = df_check["c_macd"].abs().max()
-            if macd_range < F * 0.001:
-                print(f"[viz_plotly] F={F} übersprungen — c_macd max={macd_range:.4f} < threshold={F*0.001:.4f}")
-                continue
-        panel_levels.append(F)
+    # Zeitbereich optional begrenzen (falls Zeitachse vorhanden).
+    ur_filtered = apply_time_filter(ur, start=VP_TIME_START, end=VP_TIME_END) if ur is not None else None
+    fractals_filtered = {
+        F: apply_time_filter(dfF, start=VP_TIME_START, end=VP_TIME_END)
+        for F, dfF in fractals.items()
+    }
+    # Leere Fraktale nach Filterung verwerfen.
+    fractals_filtered = {F: dfF for F, dfF in fractals_filtered.items() if not dfF.empty}
+
+    # Aktive Fraktale anhand zentralisierter Hilfslogik bestimmen.
+    panel_levels = select_active_fractal_levels(fractals_filtered, log_prefix="[viz_plotly]")
 
     if not panel_levels:
         print("[viz_plotly] Keine aktiven Fraktale!")
@@ -89,8 +78,8 @@ def plot_plotly(name, ur, fractals, nexus_df, out_dir: Path):
     min_len = None
 
     for F in panel_levels:
-        df_full = fractals[F].copy().reset_index(drop=True)
-        df_s = _safe_sample(df_full, max_points=VP_MAX_POINTS)
+        df_full = fractals_filtered[F].copy().reset_index(drop=True)
+        df_s = safe_sample(df_full, max_points=VP_MAX_POINTS)
         sampled[F] = df_s
         index_maps[F] = df_s.index.to_numpy()
         min_len = len(df_s) if min_len is None else min(min_len, len(df_s))
@@ -106,7 +95,7 @@ def plot_plotly(name, ur, fractals, nexus_df, out_dir: Path):
     x = list(range(min_len))
 
     # Vibrations-Intensitaet: rollierendes Fenster pro Tick
-    VIB_WINDOW = 200  # letzte 200 Ticks
+    VIB_WINDOW = VP_VIB_WINDOW  # letzte Ticks aus zentralem Viz-Parameter
 
     def calc_vib_array(F):
         # close_F aus sampled[F] — bereits auf min_len gesampelt
@@ -115,8 +104,8 @@ def plot_plotly(name, ur, fractals, nexus_df, out_dir: Path):
             return [0.0] * min_len
 
         # cum_height aus ur — auf min_len samplen
-        if ur is not None and "cum_height" in ur.columns:
-            ur_r = ur.reset_index(drop=True)
+        if ur_filtered is not None and "cum_height" in ur_filtered.columns:
+            ur_r = ur_filtered.reset_index(drop=True)
             if len(ur_r) > min_len:
                 step = max(1, len(ur_r) // min_len)
                 ur_s = ur_r.iloc[::step].iloc[:min_len].reset_index(drop=True)
@@ -188,9 +177,9 @@ def plot_plotly(name, ur, fractals, nexus_df, out_dir: Path):
 
     # ── ROW 1: cum_height (aus ur) + close_F Treppen je Fraktal
     # cum_height — schwarze Basislinie aus ur DataFrame
-    if ur is not None and "cum_height" in ur.columns:
+    if ur_filtered is not None and "cum_height" in ur_filtered.columns:
         # Timestamp aus Index retten (drop=False behaelt ihn als Spalte)
-        ur_reset = ur.reset_index(drop=False)
+        ur_reset = ur_filtered.reset_index(drop=False)
         ts_col = ur_reset.columns[0]  # erster Spaltenname = Timestamp
         if len(ur_reset) > min_len:
             step = max(1, len(ur_reset) // min_len)
@@ -658,7 +647,7 @@ def plot_plotly(name, ur, fractals, nexus_df, out_dir: Path):
     # HTML ausgeben
     out_path = out_dir / f"{name}_interactive_plotly.html"
     html_str = fig.to_html(
-        include_plotlyjs=True, full_html=True,
+        include_plotlyjs="cdn", full_html=True,
         config={
             "scrollZoom": True,
             "displayModeBar": True,
